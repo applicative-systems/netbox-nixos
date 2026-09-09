@@ -19,13 +19,11 @@ bundles the response as `data.json` with the Nix modules that interpret it,
 and serves the bundle as a tarball. Its outputs are `nixosProfiles.<host>`
 (profiles, not modules: importing one configures that host, there is nothing
 to enable), `nixosConfigurations.<host>` when a nixpkgs input is declared,
-and `lib.data`. The mutable URL answers with a
-`Link: <…>; rel="immutable"` header ([lockable HTTP tarball protocol]), so
-Nix locks a revision the way it locks a Git commit, with a `narHash` it
-computes itself. Nix caches the mutable URL for `tarball-ttl` (an hour);
-`nix flake update netbox --refresh` bypasses that.
-
-[lockable HTTP tarball protocol]: https://nix.dev/manual/nix/stable/protocols/tarball-fetcher
+and `lib.data`. Nix locks the URL by the NAR hash of what it fetched, so a
+change in NetBox is a hash mismatch for a stale lock, not a silent update;
+the tarball is deterministic, so unchanged data keeps a lock valid. Nix
+caches the URL for `tarball-ttl` (an hour); `nix flake update netbox
+--refresh` bypasses that.
 
 ## What is mapped
 
@@ -54,7 +52,6 @@ Nix does not have, so a default route is one line of config context.
     enable = true;
     netboxUrl = "https://netbox.example.org";
     tokenFile = "/run/secrets/netbox-token";
-    publicUrl = "https://netbox.example.org/nix";
     nixpkgs = "github:NixOS/nixpkgs/nixos-25.11";
   };
   services.nginx.virtualHosts."netbox.example.org".locations."/nix/".proxyPass =
@@ -128,19 +125,23 @@ evaluate again.
 
 ## Limitations
 
-- Revisions live in memory; after a restart, lock files pointing at old
-  revisions get a 404 until `nix flake update`.
+- There is only the mutable URL: a lock older than the current NetBox state
+  cannot be fetched again on a machine that no longer has that content, and
+  needs `nix flake update`.
 - The HTTP server is Python's `http.server`; put it behind a reverse proxy.
 - With a nixpkgs input declared, the served flake carries no lock for it.
 - NetBox 4.3 to 4.6; tested against 4.6.8, the version in nixpkgs.
 
 ## What could be done next
 
+- Immutable per-revision URLs through the `Link` header, the [lockable HTTP
+  tarball protocol] Gitea and Forgejo speak, so a stale lock stays fetchable.
 - NetBox 4.7 (`port_mappings` on services).
-- Revisions on disk, with a retention policy.
 - Refresh on NetBox event rules instead of on a timer.
 - A `flake.lock` that pins nixpkgs.
 - Authentication for consumers (Nix reads `netrc-file` for tarball inputs).
 - Routes, once the server relates addresses to prefixes.
 - Bonds, bridges, VRFs, tunnels; DHCP and DNS from prefixes and `dns_name`.
 - Committing the flake to a Git repository instead of serving it.
+
+[lockable HTTP tarball protocol]: https://nix.dev/manual/nix/stable/protocols/tarball-fetcher

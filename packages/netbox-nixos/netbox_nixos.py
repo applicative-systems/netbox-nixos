@@ -1,21 +1,18 @@
 """serve netbox as a nix flake.
 
-the mutable url answers with a `link: <url>; rel="immutable"` header, per the
-"serving tarball flakes" chapter of the nix manual. nix records that url in
-flake.lock together with the nar hash it computes itself, and the url keeps
-serving the same bytes for as long as the process lives.
+nix locks a tarball url by the nar hash of what it fetched and the newest
+mtime inside, so identical data must give identical bytes: sorted entries,
+fixed modes, mtimes taken from netbox's own timestamps.
 """
 
 from __future__ import annotations
 
 import argparse
 import gzip
-import hashlib
 import io
 import json
 import logging
 import os
-import re
 import tarfile
 import threading
 import time
@@ -137,7 +134,6 @@ EMPTY_LOCK = b'{\n  "nodes": {\n    "root": {}\n  },\n  "root": "root",\n  "vers
 
 @dataclass(frozen=True)
 class Flake:
-    rev: str
     last_modified: int
     tarball: bytes
     data: bytes
@@ -152,16 +148,8 @@ def build(snapshot: Snapshot, modules: Path, nixpkgs: str | None) -> Flake:
         files["flake.lock"] = EMPTY_LOCK
     for path in sorted(modules.rglob("*.nix")):
         files[f"modules/{path.relative_to(modules)}"] = path.read_bytes()
-
-    # a sha1 so that nix accepts it as `rev`; it covers modules and data
-    digest = hashlib.sha1()
-    for name, content in sorted(files.items()):
-        digest.update(f"{name}\0{len(content)}\0".encode())
-        digest.update(content)
-    rev = digest.hexdigest()
-
     newest = last_modified(snapshot)
-    return Flake(rev, newest, tar_gz(f"netbox-nixos-{rev}", files, newest), data)
+    return Flake(newest, tar_gz("netbox-nixos", files, newest), data)
 
 
 def last_modified(snapshot: Snapshot) -> int:
@@ -204,8 +192,8 @@ def flake_nix(nixpkgs: str | None) -> str:
 
 
 def tar_gz(top: str, files: dict[str, bytes], mtime: int) -> bytes:
-    """nix strips a single top-level directory, and checks `lastModified`
-    against the newest mtime in the archive, so every entry gets `mtime`"""
+    """nix strips a single top-level directory, and takes `lastModified` from
+    the newest mtime in the archive, so every entry gets `mtime`"""
     buffer = io.BytesIO()
     with (
         gzip.GzipFile(fileobj=buffer, mode="wb", mtime=0) as gz,
@@ -238,7 +226,6 @@ def entries(top: str, files: dict[str, bytes]) -> Iterator[tuple[str, bytes | No
 
 @dataclass(frozen=True)
 class Config:
-    public_url: str
     ttl: float
     modules: Path
     nixpkgs: str | None
@@ -253,8 +240,6 @@ class App(ThreadingHTTPServer):
         self.source = source
         self.lock = threading.Lock()
         self.current: tuple[Flake, float] | None = None
-        # revisions live only as long as the process; see the readme
-        self.revisions: dict[str, Flake] = {}
 
     def latest(self) -> Flake:
         with self.lock:
@@ -266,17 +251,12 @@ class App(ThreadingHTTPServer):
                 # a stale flake beats an outage for the hosts pulling from us
                 if self.current is None:
                     raise
-                log.exception("export failed, serving revision %s", self.current[0].rev)
+                log.exception("export failed, serving the previous one")
                 return self.current[0]
-            if flake.rev not in self.revisions:
-                log.info("revision %s", flake.rev)
-                self.revisions[flake.rev] = flake
+            if self.current is None or flake.tarball != self.current[0].tarball:
+                log.info("export changed")
             self.current = (flake, time.monotonic())
             return flake
-
-    def revision(self, rev: str) -> Flake | None:
-        with self.lock:
-            return self.revisions.get(rev)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -287,49 +267,26 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/healthz":
             self.reply(200, "text/plain", b"ok\n")
             return
-        if path in ("/flake.tar.gz", "/data.json"):
-            try:
-                flake = self.server.latest()
-            except Exception as e:
-                log.exception("export failed")
-                self.reply(503, "text/plain", f"{e}\n".encode())
-                return
-            cache_control = "no-cache"
-        elif (m := re.fullmatch(r"/rev/([0-9a-f]{40})/(flake\.tar\.gz|data\.json)", path)) and (
-            found := self.server.revision(m[1])
-        ):
-            flake = found
-            cache_control = "public, max-age=31536000, immutable"
-        else:
+        if path not in ("/flake.tar.gz", "/data.json"):
             self.reply(404, "text/plain", b"not found\n")
             return
-        if path.endswith("data.json"):
-            self.reply(200, "application/json", flake.data, cache_control)
+        try:
+            flake = self.server.latest()
+        except Exception as e:
+            log.exception("export failed")
+            self.reply(503, "text/plain", f"{e}\n".encode())
             return
-        link = None
-        if path == "/flake.tar.gz":
-            url = self.server.config.public_url
-            link = (
-                f"<{url}/rev/{flake.rev}/flake.tar.gz?rev={flake.rev}"
-                f'&lastModified={flake.last_modified}>; rel="immutable"'
-            )
-        self.reply(200, "application/gzip", flake.tarball, cache_control, link)
+        if path == "/data.json":
+            self.reply(200, "application/json", flake.data)
+        else:
+            self.reply(200, "application/gzip", flake.tarball)
 
-    def reply(
-        self,
-        status: int,
-        content_type: str,
-        body: bytes,
-        cache_control: str | None = None,
-        link: str | None = None,
-    ) -> None:
+    def reply(self, status: int, content_type: str, body: bytes) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        if cache_control:
-            self.send_header("Cache-Control", cache_control)
-        if link:
-            self.send_header("Link", link)
+        # nix keeps its own download cache for tarball-ttl anyway
+        self.send_header("Cache-Control", "no-cache")
         self.end_headers()
         self.wfile.write(body)
 
@@ -355,9 +312,6 @@ def main() -> None:
         "--fixture", type=Path, help="serve a recorded response instead of talking to netbox"
     )
     serve.add_argument("--listen", default="127.0.0.1:8080", help="address and port to listen on")
-    serve.add_argument(
-        "--public-url", help="url under which clients reach this server; used in link headers"
-    )
     serve.add_argument(
         "--nixpkgs", help="flakeref to declare as the nixpkgs input of the served flake"
     )
@@ -396,12 +350,7 @@ def main() -> None:
             return netbox.snapshot(args.platform)
 
     host, port = args.listen.rsplit(":", 1)
-    config = Config(
-        public_url=(args.public_url or f"http://{args.listen}").rstrip("/"),
-        ttl=args.ttl,
-        modules=args.modules,
-        nixpkgs=args.nixpkgs,
-    )
+    config = Config(ttl=args.ttl, modules=args.modules, nixpkgs=args.nixpkgs)
     app = App((host.strip("[]"), int(port)), config, source)
     log.info("listening on %s", args.listen)
     app.serve_forever()

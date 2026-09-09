@@ -1,7 +1,6 @@
 import gzip
 import io
 import json
-import re
 import tarfile
 import tempfile
 import threading
@@ -16,15 +15,19 @@ import netbox_nixos
 FIXTURE = Path(__file__).parent / "fixtures" / "snapshot.json"
 
 
+def modules(directory: Path) -> Path:
+    (directory / "outputs.nix").write_text("{ data, ... }: data\n")
+    (directory / "sub").mkdir()
+    (directory / "sub" / "default.nix").write_text("{ }\n")
+    (directory / "notes.md").write_text("not shipped\n")
+    return directory
+
+
 class FlakeTest(unittest.TestCase):
     def setUp(self) -> None:
         self.snapshot = cast(netbox_nixos.Snapshot, json.loads(FIXTURE.read_text()))
         self.tmp = tempfile.TemporaryDirectory()
-        self.modules = Path(self.tmp.name)
-        (self.modules / "outputs.nix").write_text("{ data, ... }: data\n")
-        (self.modules / "sub").mkdir()
-        (self.modules / "sub" / "default.nix").write_text("{ }\n")
-        (self.modules / "notes.md").write_text("not shipped\n")
+        self.modules = modules(Path(self.tmp.name))
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -37,22 +40,22 @@ class FlakeTest(unittest.TestCase):
         flake = netbox_nixos.build(self.snapshot, self.modules, None)
         with tarfile.open(fileobj=io.BytesIO(gzip.decompress(flake.tarball))) as tar:
             members = tar.getmembers()
-        top = f"netbox-nixos-{flake.rev}"
         self.assertEqual(
             [m.name for m in members],
             [
-                top,
-                f"{top}/data.json",
-                f"{top}/flake.lock",
-                f"{top}/flake.nix",
-                f"{top}/modules",
-                f"{top}/modules/outputs.nix",
-                f"{top}/modules/sub",
-                f"{top}/modules/sub/default.nix",
+                "netbox-nixos",
+                "netbox-nixos/data.json",
+                "netbox-nixos/flake.lock",
+                "netbox-nixos/flake.nix",
+                "netbox-nixos/modules",
+                "netbox-nixos/modules/outputs.nix",
+                "netbox-nixos/modules/sub",
+                "netbox-nixos/modules/sub/default.nix",
             ],
         )
         self.assertEqual(
-            [m.name for m in members if m.isdir()], [top, f"{top}/modules", f"{top}/modules/sub"]
+            [m.name for m in members if m.isdir()],
+            ["netbox-nixos", "netbox-nixos/modules", "netbox-nixos/modules/sub"],
         )
         self.assertTrue(all(m.mtime == flake.last_modified for m in members))
         self.assertTrue(all(m.uid == m.gid == 0 for m in members))
@@ -63,12 +66,11 @@ class FlakeTest(unittest.TestCase):
         first = netbox_nixos.build(self.snapshot, self.modules, None)
         second = netbox_nixos.build(self.snapshot, self.modules, None)
         self.assertEqual(first, second)
-        self.assertRegex(first.rev, r"^[0-9a-f]{40}$")
 
-    def test_modules_are_part_of_the_revision(self) -> None:
-        before = netbox_nixos.build(self.snapshot, self.modules, None).rev
+    def test_modules_change_the_bytes(self) -> None:
+        before = netbox_nixos.build(self.snapshot, self.modules, None).tarball
         (self.modules / "outputs.nix").write_text("{ data, ... }: { }\n")
-        self.assertNotEqual(netbox_nixos.build(self.snapshot, self.modules, None).rev, before)
+        self.assertNotEqual(netbox_nixos.build(self.snapshot, self.modules, None).tarball, before)
 
     def test_data_json_is_canonical(self) -> None:
         flake = netbox_nixos.build(self.snapshot, self.modules, None)
@@ -85,19 +87,16 @@ class FlakeTest(unittest.TestCase):
         self.assertIn('inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";', with_input)
         self.assertIn("{ nixpkgs, ... }:", with_input)
         self.assertIn("inherit nixpkgs;", with_input)
-        locked = netbox_nixos.build(self.snapshot, self.modules, "github:NixOS/nixpkgs")
-        with tarfile.open(fileobj=io.BytesIO(gzip.decompress(locked.tarball))) as tar:
-            self.assertNotIn(f"netbox-nixos-{locked.rev}/flake.lock", tar.getnames())
+        unlocked = netbox_nixos.build(self.snapshot, self.modules, "github:NixOS/nixpkgs")
+        with tarfile.open(fileobj=io.BytesIO(gzip.decompress(unlocked.tarball))) as tar:
+            self.assertNotIn("netbox-nixos/flake.lock", tar.getnames())
 
 
 class ServerTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
-        modules = Path(self.tmp.name)
-        (modules / "outputs.nix").write_text("{ data, ... }: data\n")
-        config = netbox_nixos.Config(
-            public_url="http://example.org/nix", ttl=60, modules=modules, nixpkgs=None
-        )
+        self.modules = modules(Path(self.tmp.name))
+        config = netbox_nixos.Config(ttl=60, modules=self.modules, nixpkgs=None)
         self.app = netbox_nixos.App(
             ("127.0.0.1", 0),
             config,
@@ -111,29 +110,20 @@ class ServerTest(unittest.TestCase):
         self.app.server_close()
         self.tmp.cleanup()
 
-    def test_link_header_names_an_immutable_url_with_the_same_bytes(self) -> None:
+    def test_serves_the_same_bytes_a_fresh_build_gives(self) -> None:
+        snapshot = cast(netbox_nixos.Snapshot, json.loads(FIXTURE.read_text()))
+        expected = netbox_nixos.build(snapshot, self.modules, None)
         with urlopen(f"{self.base}/flake.tar.gz") as response:
-            tarball = response.read()
-            link = response.headers["Link"]
+            self.assertEqual(response.read(), expected.tarball)
             self.assertEqual(response.headers["Cache-Control"], "no-cache")
-        m = re.fullmatch(
-            r"<http://example\.org/nix/rev/([0-9a-f]{40})/flake\.tar\.gz"
-            r'\?rev=\1&lastModified=(\d+)>; rel="immutable"',
-            link,
-        )
-        self.assertIsNotNone(m, link)
-        assert m is not None
-        with urlopen(f"{self.base}/rev/{m[1]}/flake.tar.gz") as response:
-            self.assertEqual(response.read(), tarball)
-            self.assertIn("immutable", response.headers["Cache-Control"])
-        with urlopen(f"{self.base}/rev/{m[1]}/data.json") as response:
-            self.assertEqual(json.load(response)["netbox_version"], "4.6.8")
-        with self.assertRaises(HTTPError) as unknown:
-            urlopen(f"{self.base}/rev/{'0' * 40}/flake.tar.gz")
-        self.assertEqual(unknown.exception.code, 404)
-        unknown.exception.close()
+        with urlopen(f"{self.base}/data.json") as response:
+            self.assertEqual(response.read(), expected.data)
         with urlopen(f"{self.base}/healthz") as response:
             self.assertEqual(response.read(), b"ok\n")
+        with self.assertRaises(HTTPError) as unknown:
+            urlopen(f"{self.base}/rev/0/flake.tar.gz")
+        self.assertEqual(unknown.exception.code, 404)
+        unknown.exception.close()
 
 
 class NetBoxTest(unittest.TestCase):

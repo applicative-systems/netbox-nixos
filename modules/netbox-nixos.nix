@@ -25,11 +25,6 @@ in
       default = "127.0.0.1:8080";
       description = "address and port to listen on";
     };
-    publicUrl = lib.mkOption {
-      type = lib.types.str;
-      example = "https://netbox.example.org/nix";
-      description = "url under which clients reach the server; recorded in link headers and lock files";
-    };
     nixpkgs = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -61,7 +56,6 @@ in
             netbox-url = cfg.netboxUrl;
             token-file = "%d/token";
             listen = cfg.listen;
-            public-url = cfg.publicUrl;
             nixpkgs = cfg.nixpkgs;
             platform = cfg.platform;
             ttl = cfg.ttl;

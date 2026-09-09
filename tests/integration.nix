@@ -42,7 +42,6 @@ pkgs.testers.runNixOSTest {
             pkgs.writeText "token" "nbt_abcdefghijkl.0123456789abcdefghijklmnopqrstuvwxyz0123"
           );
           listen = "0.0.0.0:8080";
-          publicUrl = "http://server:8080";
           ttl = 1;
         };
         networking.firewall.allowedTCPPorts = [ 8080 ];
@@ -101,37 +100,29 @@ pkgs.testers.runNixOSTest {
           guest.port = 8080;
         }
       ];
-      services.netbox-nixos = {
-        publicUrl = pkgs.lib.mkForce "http://localhost:8080";
-        nixpkgs = "path:${pkgs.path}";
-      };
+      services.netbox-nixos.nixpkgs = "path:${pkgs.path}";
     };
   };
 
   testScript = ''
     import json
-    import re
+    import shlex
 
     start_all()
     netbox.wait_for_unit("netbox-seed.service")
     server.wait_for_unit("netbox-nixos.service")
 
+    url = "http://server:8080/flake.tar.gz"
 
-    def fetch():
-        headers = client.wait_until_succeeds("curl -sfD - -o flake.tar.gz http://server:8080/flake.tar.gz")
-        m = re.search(
-            r'link: <(http://server:8080/rev/([0-9a-f]{40})/flake\.tar\.gz)\?rev=\2&lastModified=(\d+)>; rel="immutable"',
-            headers,
-            re.IGNORECASE,
-        )
-        assert m, headers
-        return m.group(1), m.group(2), int(m.group(3))
+
+    def metadata():
+        return json.loads(client.succeed(f"nix flake metadata --json {url}"))
 
 
     def evaluate(host, expr):
         prelude = (
             'let config = (import (<nixpkgs> + "/nixos/lib/eval-config.nix") { system = null; modules = [ '
-            f'(builtins.getFlake "http://server:8080/flake.tar.gz").nixosProfiles.{host} '
+            f'(builtins.getFlake "{url}").nixosProfiles.{host} '
             '{ nixpkgs.hostPlatform = "x86_64-linux"; } ]; }).config; in '
         )
         return json.loads(client.succeed(f"nix eval --json --impure --expr '{prelude}{expr}'"))
@@ -145,21 +136,18 @@ pkgs.testers.runNixOSTest {
         )
 
 
-    with subtest("the link header names an immutable url serving the same bytes"):
-        immutable, rev, last_modified = fetch()
-        client.succeed("cp flake.tar.gz first.tar.gz && mkdir x && tar xzf flake.tar.gz -C x")
-        nar_hash = client.succeed("nix hash path x/netbox-nixos-*").strip()
-        client.succeed(f"curl -sf -o rev.tar.gz {immutable} && cmp flake.tar.gz rev.tar.gz")
-
-    # the server announces no narhash; nix computes it from what it fetched
-    with subtest("nix locks the mutable url to the immutable one"):
-        locked = json.loads(client.succeed("nix flake metadata --json http://server:8080/flake.tar.gz"))["locked"]
-        expected = {"__final": True, "lastModified": last_modified, "narHash": nar_hash, "rev": rev, "type": "tarball", "url": immutable}
-        assert locked == expected, locked
-        hosts = json.loads(client.succeed("nix eval --json 'http://server:8080/flake.tar.gz#lib.hosts'"))
+    with subtest("nix locks the url by the content it got"):
+        client.wait_until_succeeds(f"curl -sf -o flake.tar.gz {url}")
+        client.succeed("mkdir x && tar xzf flake.tar.gz -C x")
+        nar_hash = client.succeed("nix hash path x/netbox-nixos").strip()
+        last_modified = int(client.succeed("stat -c %Y x/netbox-nixos/data.json").strip())
+        first = metadata()
+        expected = {"__final": True, "lastModified": last_modified, "narHash": nar_hash, "type": "tarball", "url": url}
+        assert first["locked"] == expected, first["locked"]
+        hosts = json.loads(client.succeed(f"nix eval --json '{url}#lib.hosts'"))
         assert sorted(hosts) == ["bobr", "router", "zubr"], hosts
 
-    with subtest("the module maps netbox objects onto nixos options"):
+    with subtest("the profile maps netbox objects onto nixos options"):
         eth0 = network("router", "10-eth0")
         assert eth0 == {
             "matchConfig": {"MACAddress": "52:54:00:12:34:56"},
@@ -186,12 +174,19 @@ pkgs.testers.runNixOSTest {
         assert evaluate("zubr", "config.networking.firewall.allowedUDPPorts") == [53]
         assert network("bobr", "10-eth0")["matchConfig"] == {"MACAddress": "52:54:00:AA:BB:CC"}
 
-    with subtest("a change in netbox becomes a new revision and the old one stays"):
+    with subtest("a change in netbox is a new nar hash, and a stale lock notices"):
         netbox.succeed(
             """netbox-manage shell -c "from ipam.models import IPAddress; ip = IPAddress.objects.get(address='10.0.0.5/24'); ip.address = '10.0.0.6/24'; ip.save()" """
         )
-        retry(lambda _: fetch()[1] != rev)
+        retry(lambda _: metadata()["locked"]["narHash"] != nar_hash)
         assert network("router", "10-eth0")["address"] == ["10.0.0.6/24"]
-        client.succeed(f"curl -sf -o old.tar.gz {immutable} && cmp first.tar.gz old.tar.gz")
+        # a consumer still locked to the old content, on a machine that no longer has it
+        locked = {k: v for k, v in first["locked"].items() if k != "__final"}
+        lock = {"nodes": {"netbox": {"locked": locked, "original": {"type": "tarball", "url": url}}, "root": {"inputs": {"netbox": "netbox"}}}, "root": "root", "version": 7}
+        flake = f'{{ inputs.netbox.url = "{url}"; outputs = {{ netbox, ... }}: {{ hosts = netbox.lib.hosts; }}; }}'
+        client.succeed(f"mkdir consumer && echo {shlex.quote(flake)} > consumer/flake.nix && echo {shlex.quote(json.dumps(lock))} > consumer/flake.lock")
+        client.succeed(f"nix store delete {first['path']}")
+        stale = client.fail("nix eval --json ./consumer#hosts 2>&1")
+        assert "mismatch" in stale, stale
   '';
 }
