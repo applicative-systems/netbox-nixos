@@ -1,11 +1,9 @@
 {
-  "netbox_version": "4.6.8",
   "devices": [
     {
       "id": "12",
       "name": "router",
       "status": "active",
-      "last_updated": "2026-09-01T09:15:00.000000+00:00",
       "site": { "slug": "lab" },
       "role": { "slug": "router" },
       "platform": { "slug": "nixos" },
@@ -36,14 +34,12 @@
             {
               "address": "10.0.0.5/24",
               "status": "active",
-              "dns_name": "router.example.org",
-              "last_updated": "2026-09-03T12:00:00.000000+00:00"
+              "dns_name": "router.example.org"
             },
             {
               "address": "2001:db8::5/64",
               "status": "active",
-              "dns_name": "",
-              "last_updated": "2026-09-02T12:00:00.000000+00:00"
+              "dns_name": ""
             }
           ]
         },
@@ -63,8 +59,7 @@
             {
               "address": "10.0.10.1/24",
               "status": "active",
-              "dns_name": "",
-              "last_updated": "2026-09-02T12:00:00.000000+00:00"
+              "dns_name": ""
             }
           ]
         },
@@ -98,8 +93,7 @@
             {
               "address": "192.0.2.5/24",
               "status": "active",
-              "dns_name": "",
-              "last_updated": "2026-09-02T12:00:00.000000+00:00"
+              "dns_name": ""
             }
           ]
         },
@@ -123,7 +117,6 @@
       "id": "13",
       "name": null,
       "status": "planned",
-      "last_updated": "2026-08-30T00:00:00+00:00",
       "site": { "slug": "lab" },
       "role": { "slug": "router" },
       "platform": { "slug": "nixos" },
@@ -141,7 +134,6 @@
       "id": "7",
       "name": "bobr",
       "status": "active",
-      "last_updated": "2026-09-04T08:00:00.000000+00:00",
       "site": { "slug": "lab" },
       "role": { "slug": "server" },
       "platform": { "slug": "nixos" },
@@ -168,8 +160,7 @@
             {
               "address": "10.0.0.10/24",
               "status": "active",
-              "dns_name": "bobr.example.org",
-              "last_updated": "2026-09-04T08:00:00.000000+00:00"
+              "dns_name": "bobr.example.org"
             }
           ]
         }

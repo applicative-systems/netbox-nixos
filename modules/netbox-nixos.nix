@@ -36,11 +36,6 @@ in
       default = "nixos";
       description = "platform slug that marks a device or virtual machine as a nixos host";
     };
-    ttl = lib.mkOption {
-      type = lib.types.ints.positive;
-      default = 30;
-      description = "seconds before the export is refreshed";
-    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -51,14 +46,13 @@ in
       after = [ "network-online.target" ];
       serviceConfig = {
         ExecStart =
-          "${lib.getExe cfg.package} serve "
+          "${lib.getExe cfg.package} "
           + lib.cli.toCommandLineShellGNU { } {
             netbox-url = cfg.netboxUrl;
             token-file = "%d/token";
             listen = cfg.listen;
             nixpkgs = cfg.nixpkgs;
             platform = cfg.platform;
-            ttl = cfg.ttl;
           };
         LoadCredential = [ "token:${cfg.tokenFile}" ];
         DynamicUser = true;

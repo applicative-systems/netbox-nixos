@@ -1,8 +1,7 @@
 """serve netbox as a nix flake.
 
 nix locks a tarball url by the nar hash of what it fetched and the newest
-mtime inside, so identical data must give identical bytes: sorted entries,
-fixed modes, mtimes taken from netbox's own timestamps.
+mtime inside, so identical data must give identical bytes.
 """
 
 from __future__ import annotations
@@ -11,166 +10,78 @@ import argparse
 import gzip
 import io
 import json
-import logging
 import os
 import tarfile
-import threading
-import time
-from collections.abc import Callable, Iterator
-from dataclasses import dataclass
-from datetime import datetime
+from collections.abc import Callable
+from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import TypedDict, cast
-from urllib.parse import urlsplit
+from typing import Any, cast
 from urllib.request import Request, urlopen
 
-log = logging.getLogger("netbox-nixos")
-
 type Json = dict[str, Json] | list[Json] | str | int | float | bool | None
-
-
-class Snapshot(TypedDict):
-    netbox_version: str
-    devices: list[Json]
-    virtual_machines: list[Json]
+type Snapshot = dict[str, list[Json]]
 
 
 # field names follow netbox's strawberry types in dcim/graphql/types.py,
 # ipam/graphql/types.py and virtualization/graphql/types.py
-IP_ADDRESS = "ip_addresses { address status dns_name last_updated }"
-DEVICE_INTERFACE = (
-    "interfaces { name type enabled mgmt_only mtu mode description "
-    "primary_mac_address { mac_address } parent { name } untagged_vlan { vid name } "
-    f"tagged_vlans {{ vid name }} {IP_ADDRESS} }}"
-)
-# vm interfaces have neither a type nor mgmt_only
-VM_INTERFACE = (
-    "interfaces { name enabled mtu mode description "
-    "primary_mac_address { mac_address } parent { name } untagged_vlan { vid name } "
-    f"tagged_vlans {{ vid name }} {IP_ADDRESS} }}"
-)
-HOST_FIELDS = (
-    "id name status last_updated site { slug } role { slug } platform { slug } "
-    "primary_ip4 { address } primary_ip6 { address } tags { slug } custom_fields config_context "
-    "services { name protocol ports }"
-)
-
-
-def host_query(list_name: str, interface: str) -> str:
+def query(list_name: str, interface_extra: str) -> str:
     return (
         "query ($platform: String!, $start: Int!, $limit: Int!) { "
         f"{list_name}(filters: {{ platform: {{ slug: {{ exact: $platform }} }} }}, "
-        "pagination: { start: $start, limit: $limit }) "
-        f"{{ {HOST_FIELDS} {interface} }} }}"
+        "pagination: { start: $start, limit: $limit }) { "
+        "id name status site { slug } role { slug } platform { slug } "
+        "primary_ip4 { address } primary_ip6 { address } tags { slug } "
+        "custom_fields config_context "
+        "services { name protocol ports } "
+        f"interfaces {{ name enabled mtu mode description {interface_extra} "
+        "primary_mac_address { mac_address } parent { name } "
+        "untagged_vlan { vid name } tagged_vlans { vid name } "
+        "ip_addresses { address status dns_name } } } }"
     )
 
 
-class NetBox:
-    def __init__(self, url: str, token: str) -> None:
-        self.url = url.rstrip("/")
-        # v2 tokens are "<key>.<secret>" (prefixed with "nbt_" since 4.6) and
-        # go in a bearer header, v1 tokens never contain a dot
-        # (netbox/api/authentication.py)
-        token = token.strip()
-        self.authorization = f"Bearer {token}" if "." in token else f"Token {token}"
+def graphql(url: str, token: str, query: str, variables: Json) -> Json:
+    # v2 tokens contain a dot and go in a bearer header
+    # (netbox/api/authentication.py)
+    authorization = f"Bearer {token}" if "." in token else f"Token {token}"
+    request = Request(
+        f"{url}/graphql/",
+        data=json.dumps({"query": query, "variables": variables}).encode(),
+        headers={"Authorization": authorization, "Content-Type": "application/json"},
+    )
+    with urlopen(request) as response:
+        reply = cast(dict[str, Json], json.load(response))
+    if "errors" in reply:
+        raise RuntimeError(str(reply["errors"]))
+    return reply["data"]
 
-    def snapshot(self, platform: str) -> Snapshot:
-        version = self.request("/api/status/")["netbox-version"]
-        if not isinstance(version, str):
-            raise RuntimeError("/api/status/ has no netbox-version")
-        return {
-            "netbox_version": version,
-            "devices": self.list("device_list", DEVICE_INTERFACE, platform),
-            "virtual_machines": self.list("virtual_machine_list", VM_INTERFACE, platform),
-        }
 
-    # cursor pagination (netbox >= 4.5.2): `start` is the smallest primary
-    # key to return, so the next page begins after the last id seen
-    def list(self, list_name: str, interface: str, platform: str) -> list[Json]:
-        query = host_query(list_name, interface)
-        limit = 500
-        start = 0
-        items: list[Json] = []
-        while True:
-            variables: Json = {"platform": platform, "start": start, "limit": limit}
-            body = self.request("/graphql/", {"query": query, "variables": variables})
-            if "errors" in body:
-                raise RuntimeError(f"graphql {list_name}: {body['errors']}")
-            data = body["data"]
-            page = data.get(list_name) if isinstance(data, dict) else None
-            if not isinstance(page, list):
-                raise RuntimeError(f"graphql {list_name}: no list in response")
-            items.extend(page)
-            if len(page) < limit:
-                return items
-            last = page[-1]
-            last_id = last.get("id") if isinstance(last, dict) else None
-            if not isinstance(last_id, str):
-                raise RuntimeError(f"graphql {list_name}: item without id")
-            start = int(last_id) + 1
+def hosts(url: str, token: str, platform: str, list_name: str, interface_extra: str) -> list[Json]:
+    items: list[Json] = []
+    start = 0
+    while True:
+        variables: Json = {"platform": platform, "start": start, "limit": 500}
+        data = graphql(url, token, query(list_name, interface_extra), variables)
+        page = cast(list[dict[str, Json]], cast(dict[str, Json], data)[list_name])
+        items.extend(page)
+        if len(page) < 500:
+            return items
+        # cursor pagination (netbox >= 4.5.2): `start` is the smallest primary key to return
+        start = int(cast(str, page[-1]["id"])) + 1
 
-    def request(self, path: str, body: Json = None) -> dict[str, Json]:
-        request = Request(
-            self.url + path,
-            data=None if body is None else json.dumps(body).encode(),
-            headers={
-                "Authorization": self.authorization,
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            },
-        )
-        with urlopen(request) as response:
-            reply: Json = json.load(response)
-        if not isinstance(reply, dict):
-            raise RuntimeError(f"{path}: unexpected response")
-        return reply
+
+def snapshot(url: str, token: str, platform: str) -> Snapshot:
+    # vm interfaces have neither a type nor mgmt_only
+    return {
+        "devices": hosts(url, token, platform, "device_list", "type mgmt_only"),
+        "virtual_machines": hosts(url, token, platform, "virtual_machine_list", ""),
+    }
 
 
 # nix refuses to evaluate a remote flake whose lock file it would have to
 # write, even one without inputs
 EMPTY_LOCK = b'{\n  "nodes": {\n    "root": {}\n  },\n  "root": "root",\n  "version": 7\n}\n'
-
-
-@dataclass(frozen=True)
-class Flake:
-    last_modified: int
-    tarball: bytes
-    data: bytes
-
-
-def build(snapshot: Snapshot, modules: Path, nixpkgs: str | None) -> Flake:
-    # sorted keys, so the same data always gives the same bytes
-    data = json.dumps(snapshot, indent=2, sort_keys=True).encode() + b"\n"
-    files = {"flake.nix": flake_nix(nixpkgs).encode(), "data.json": data}
-    # with a nixpkgs input, locking is left to the flake that uses this one
-    if nixpkgs is None:
-        files["flake.lock"] = EMPTY_LOCK
-    for path in sorted(modules.rglob("*.nix")):
-        files[f"modules/{path.relative_to(modules)}"] = path.read_bytes()
-    newest = last_modified(snapshot)
-    return Flake(newest, tar_gz("netbox-nixos", files, newest), data)
-
-
-def last_modified(snapshot: Snapshot) -> int:
-    """the newest `last_updated` in the export, so that it moves only when netbox data did"""
-    return max(newest(snapshot["devices"]), newest(snapshot["virtual_machines"]))
-
-
-def newest(value: Json) -> int:
-    if isinstance(value, dict):
-        return max(
-            (
-                int(datetime.fromisoformat(v).timestamp())
-                if k == "last_updated" and isinstance(v, str)
-                else newest(v)
-                for k, v in value.items()
-            ),
-            default=0,
-        )
-    if isinstance(value, list):
-        return max(map(newest, value), default=0)
-    return 0
 
 
 def flake_nix(nixpkgs: str | None) -> str:
@@ -191,169 +102,70 @@ def flake_nix(nixpkgs: str | None) -> str:
 """
 
 
-def tar_gz(top: str, files: dict[str, bytes], mtime: int) -> bytes:
-    """nix strips a single top-level directory, and takes `lastModified` from
-    the newest mtime in the archive, so every entry gets `mtime`"""
+def tarball(snapshot: Snapshot, modules: Path, nixpkgs: str | None) -> bytes:
+    files = {
+        "flake.nix": flake_nix(nixpkgs).encode(),
+        # sorted keys: identical data, identical bytes
+        "data.json": json.dumps(snapshot, indent=2, sort_keys=True).encode() + b"\n",
+        **{f"modules/{p.relative_to(modules)}": p.read_bytes() for p in modules.rglob("*.nix")},
+    }
+    # with a nixpkgs input, locking is left to the flake that uses this one
+    if nixpkgs is None:
+        files["flake.lock"] = EMPTY_LOCK
     buffer = io.BytesIO()
+    # every mtime stays 0: nix reads `lastModified` off the newest one and
+    # compares it with the lock. nix strips the single top-level directory
     with (
         gzip.GzipFile(fileobj=buffer, mode="wb", mtime=0) as gz,
         tarfile.open(fileobj=gz, mode="w", format=tarfile.GNU_FORMAT) as tar,
     ):
-        for name, content in entries(top, files):
-            info = tarfile.TarInfo(name)
-            info.mtime = mtime
-            if content is None:
-                info.type = tarfile.DIRTYPE
-                info.mode = 0o755
-                tar.addfile(info)
-            else:
-                info.size = len(content)
-                info.mode = 0o644
-                tar.addfile(info, io.BytesIO(content))
+        for name in sorted(files):
+            info = tarfile.TarInfo(f"netbox-nixos/{name}")
+            info.size = len(files[name])
+            info.mode = 0o644
+            tar.addfile(info, io.BytesIO(files[name]))
     return buffer.getvalue()
 
 
-def entries(top: str, files: dict[str, bytes]) -> Iterator[tuple[str, bytes | None]]:
-    paths: dict[str, bytes | None] = {top: None}
-    for name, content in files.items():
-        for parent in Path(name).parents:
-            if parent.name:
-                paths[f"{top}/{parent}"] = None
-        paths[f"{top}/{name}"] = content
-    for name in sorted(paths):
-        yield (name if paths[name] is not None else name + "/"), paths[name]
-
-
-@dataclass(frozen=True)
-class Config:
-    ttl: float
-    modules: Path
-    nixpkgs: str | None
-
-
-class App(ThreadingHTTPServer):
-    def __init__(
-        self, address: tuple[str, int], config: Config, source: Callable[[], Snapshot]
-    ) -> None:
-        super().__init__(address, Handler)
-        self.config = config
-        self.source = source
-        self.lock = threading.Lock()
-        self.current: tuple[Flake, float] | None = None
-
-    def latest(self) -> Flake:
-        with self.lock:
-            if self.current and time.monotonic() - self.current[1] < self.config.ttl:
-                return self.current[0]
-            try:
-                flake = build(self.source(), self.config.modules, self.config.nixpkgs)
-            except Exception:
-                # a stale flake beats an outage for the hosts pulling from us
-                if self.current is None:
-                    raise
-                log.exception("export failed, serving the previous one")
-                return self.current[0]
-            if self.current is None or flake.tarball != self.current[0].tarball:
-                log.info("export changed")
-            self.current = (flake, time.monotonic())
-            return flake
-
-
 class Handler(BaseHTTPRequestHandler):
-    server: App
+    def __init__(self, flake: Callable[[], bytes], *args: Any) -> None:
+        self.flake = flake
+        super().__init__(*args)
 
     def do_GET(self) -> None:
-        path = urlsplit(self.path).path
-        if path == "/healthz":
-            self.reply(200, "text/plain", b"ok\n")
-            return
-        if path not in ("/flake.tar.gz", "/data.json"):
-            self.reply(404, "text/plain", b"not found\n")
+        if self.path != "/flake.tar.gz":
+            self.send_error(404)
             return
         try:
-            flake = self.server.latest()
+            body = self.flake()
         except Exception as e:
-            log.exception("export failed")
-            self.reply(503, "text/plain", f"{e}\n".encode())
+            self.send_error(503, explain=str(e))
             return
-        if path == "/data.json":
-            self.reply(200, "application/json", flake.data)
-        else:
-            self.reply(200, "application/gzip", flake.tarball)
-
-    def reply(self, status: int, content_type: str, body: bytes) -> None:
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/gzip")
         self.send_header("Content-Length", str(len(body)))
-        # nix keeps its own download cache for tarball-ttl anyway
-        self.send_header("Cache-Control", "no-cache")
         self.end_headers()
         self.wfile.write(body)
 
-    def log_message(self, format: str, *args: object) -> None:
-        log.info(format, *args)
-
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="netbox-nixos", description="serve netbox as a nix flake")
-    commands = parser.add_subparsers(dest="command", required=True)
-    serve = commands.add_parser("serve", help="serve netbox as a flake over http")
-    serve.add_argument(
-        "--netbox-url", default=os.environ.get("NETBOX_URL"), help="base url of netbox"
-    )
-    serve.add_argument(
-        "--token-file",
-        type=Path,
-        default=os.environ.get("NETBOX_TOKEN_FILE"),
-        help="file containing the api token",
-    )
-    serve.add_argument("--token", default=os.environ.get("NETBOX_TOKEN"), help=argparse.SUPPRESS)
-    serve.add_argument(
-        "--fixture", type=Path, help="serve a recorded response instead of talking to netbox"
-    )
-    serve.add_argument("--listen", default="127.0.0.1:8080", help="address and port to listen on")
-    serve.add_argument(
-        "--nixpkgs", help="flakeref to declare as the nixpkgs input of the served flake"
-    )
-    serve.add_argument(
-        "--platform",
-        default="nixos",
-        help="platform slug that marks a device or vm as a nixos host",
-    )
-    serve.add_argument(
-        "--ttl", type=float, default=30, help="seconds before the export is refreshed"
-    )
-    serve.add_argument(
-        "--modules",
-        type=Path,
-        default=Path(os.environ.get("NETBOX_NIXOS_MODULES", "modules/netbox")),
-        help="directory with the nix modules to bundle",
+    parser = argparse.ArgumentParser(description="serve netbox as a nix flake")
+    parser.add_argument("--netbox-url", required=True)
+    parser.add_argument("--token-file", type=Path, required=True)
+    parser.add_argument("--listen", default="127.0.0.1:8080")
+    parser.add_argument("--platform", default="nixos", help="platform slug of the nixos hosts")
+    parser.add_argument(
+        "--nixpkgs", help="flakeref declared as the nixpkgs input of the served flake"
     )
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    token = args.token_file.read_text().strip()
+    modules = Path(os.environ.get("NETBOX_NIXOS_MODULES", "modules/netbox"))
 
-    if (args.fixture is None) == (args.netbox_url is None):
-        parser.error("exactly one of --netbox-url or --fixture is required")
-    source: Callable[[], Snapshot]
-    if args.fixture is not None:
-
-        def source() -> Snapshot:
-            return cast(Snapshot, json.loads(args.fixture.read_text()))
-
-    else:
-        token = args.token_file.read_text() if args.token_file else args.token
-        if token is None:
-            parser.error("--token-file or --token is required with --netbox-url")
-        netbox = NetBox(args.netbox_url, token)
-
-        def source() -> Snapshot:
-            return netbox.snapshot(args.platform)
+    def flake() -> bytes:
+        return tarball(snapshot(args.netbox_url, token, args.platform), modules, args.nixpkgs)
 
     host, port = args.listen.rsplit(":", 1)
-    config = Config(ttl=args.ttl, modules=args.modules, nixpkgs=args.nixpkgs)
-    app = App((host.strip("[]"), int(port)), config, source)
-    log.info("listening on %s", args.listen)
-    app.serve_forever()
+    ThreadingHTTPServer((host.strip("[]"), int(port)), partial(Handler, flake)).serve_forever()
 
 
 if __name__ == "__main__":

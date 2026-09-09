@@ -42,7 +42,6 @@ pkgs.testers.runNixOSTest {
             pkgs.writeText "token" "nbt_abcdefghijkl.0123456789abcdefghijklmnopqrstuvwxyz0123"
           );
           listen = "0.0.0.0:8080";
-          ttl = 1;
         };
         networking.firewall.allowedTCPPorts = [ 8080 ];
       };
@@ -140,9 +139,9 @@ pkgs.testers.runNixOSTest {
         client.wait_until_succeeds(f"curl -sf -o flake.tar.gz {url}")
         client.succeed("mkdir x && tar xzf flake.tar.gz -C x")
         nar_hash = client.succeed("nix hash path x/netbox-nixos").strip()
-        last_modified = int(client.succeed("stat -c %Y x/netbox-nixos/data.json").strip())
         first = metadata()
-        expected = {"__final": True, "lastModified": last_modified, "narHash": nar_hash, "type": "tarball", "url": url}
+        # all mtimes are 0, and nix records no lastModified for that
+        expected = {"__final": True, "narHash": nar_hash, "type": "tarball", "url": url}
         assert first["locked"] == expected, first["locked"]
         hosts = json.loads(client.succeed(f"nix eval --json '{url}#lib.hosts'"))
         assert sorted(hosts) == ["bobr", "router", "zubr"], hosts
