@@ -1,0 +1,179 @@
+{
+  "netbox_version": "4.6.8",
+  "devices": [
+    {
+      "id": "12",
+      "name": "router",
+      "status": "active",
+      "last_updated": "2026-09-01T09:15:00.000000+00:00",
+      "site": { "slug": "lab" },
+      "role": { "slug": "router" },
+      "platform": { "slug": "nixos" },
+      "primary_ip4": { "address": "10.0.0.5/24" },
+      "primary_ip6": { "address": "2001:db8::5/64" },
+      "tags": [ { "slug": "edge" } ],
+      "custom_fields": { "nixos_system": "x86_64-linux" },
+      "config_context": { "nixos": { "time": { "timeZone": "UTC" } }, "ntp": [ "10.0.0.1" ] },
+      "services": [
+        { "name": "ssh", "protocol": "tcp", "ports": [ 22 ] },
+        { "name": "dns", "protocol": "udp", "ports": [ 53 ] },
+        { "name": "dns-tcp", "protocol": "tcp", "ports": [ 53 ] }
+      ],
+      "interfaces": [
+        {
+          "name": "eth0",
+          "type": "1000base-t",
+          "enabled": true,
+          "mgmt_only": false,
+          "mtu": 1500,
+          "mode": "tagged",
+          "description": "uplink",
+          "primary_mac_address": { "mac_address": "52:54:00:12:34:56" },
+          "parent": null,
+          "untagged_vlan": null,
+          "tagged_vlans": [ { "vid": 10, "name": "lan" } ],
+          "ip_addresses": [
+            {
+              "address": "10.0.0.5/24",
+              "status": "active",
+              "dns_name": "router.example.org",
+              "last_updated": "2026-09-03T12:00:00.000000+00:00"
+            },
+            {
+              "address": "2001:db8::5/64",
+              "status": "active",
+              "dns_name": "",
+              "last_updated": "2026-09-02T12:00:00.000000+00:00"
+            }
+          ]
+        },
+        {
+          "name": "eth0.10",
+          "type": "virtual",
+          "enabled": true,
+          "mgmt_only": false,
+          "mtu": null,
+          "mode": "access",
+          "description": "",
+          "primary_mac_address": null,
+          "parent": { "name": "eth0" },
+          "untagged_vlan": { "vid": 10, "name": "lan" },
+          "tagged_vlans": [],
+          "ip_addresses": [
+            {
+              "address": "10.0.10.1/24",
+              "status": "active",
+              "dns_name": "",
+              "last_updated": "2026-09-02T12:00:00.000000+00:00"
+            }
+          ]
+        },
+        {
+          "name": "eth1",
+          "type": "1000base-t",
+          "enabled": false,
+          "mgmt_only": false,
+          "mtu": null,
+          "mode": null,
+          "description": "spare",
+          "primary_mac_address": { "mac_address": "52:54:00:12:34:57" },
+          "parent": null,
+          "untagged_vlan": null,
+          "tagged_vlans": [],
+          "ip_addresses": []
+        },
+        {
+          "name": "mgmt0",
+          "type": "1000base-t",
+          "enabled": true,
+          "mgmt_only": true,
+          "mtu": null,
+          "mode": null,
+          "description": "",
+          "primary_mac_address": { "mac_address": "52:54:00:12:34:58" },
+          "parent": null,
+          "untagged_vlan": null,
+          "tagged_vlans": [],
+          "ip_addresses": [
+            {
+              "address": "192.0.2.5/24",
+              "status": "active",
+              "dns_name": "",
+              "last_updated": "2026-09-02T12:00:00.000000+00:00"
+            }
+          ]
+        },
+        {
+          "name": "bond0",
+          "type": "lag",
+          "enabled": true,
+          "mgmt_only": false,
+          "mtu": null,
+          "mode": null,
+          "description": "",
+          "primary_mac_address": null,
+          "parent": null,
+          "untagged_vlan": null,
+          "tagged_vlans": [],
+          "ip_addresses": []
+        }
+      ]
+    },
+    {
+      "id": "13",
+      "name": null,
+      "status": "planned",
+      "last_updated": "2026-08-30T00:00:00+00:00",
+      "site": { "slug": "lab" },
+      "role": { "slug": "router" },
+      "platform": { "slug": "nixos" },
+      "primary_ip4": null,
+      "primary_ip6": null,
+      "tags": [],
+      "custom_fields": {},
+      "config_context": {},
+      "services": [],
+      "interfaces": []
+    }
+  ],
+  "virtual_machines": [
+    {
+      "id": "7",
+      "name": "bobr",
+      "status": "active",
+      "last_updated": "2026-09-04T08:00:00.000000+00:00",
+      "site": { "slug": "lab" },
+      "role": { "slug": "server" },
+      "platform": { "slug": "nixos" },
+      "primary_ip4": { "address": "10.0.0.10/24" },
+      "primary_ip6": null,
+      "tags": [],
+      "custom_fields": {},
+      "config_context": { "ntp": [ "10.0.0.1" ] },
+      "services": [
+        { "name": "http", "protocol": "tcp", "ports": [ 80, 443 ] }
+      ],
+      "interfaces": [
+        {
+          "name": "eth0",
+          "enabled": true,
+          "mtu": null,
+          "mode": null,
+          "description": "",
+          "primary_mac_address": { "mac_address": "52:54:00:AA:BB:CC" },
+          "parent": null,
+          "untagged_vlan": null,
+          "tagged_vlans": [],
+          "ip_addresses": [
+            {
+              "address": "10.0.0.10/24",
+              "status": "active",
+              "dns_name": "bobr.example.org",
+              "last_updated": "2026-09-04T08:00:00.000000+00:00"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
