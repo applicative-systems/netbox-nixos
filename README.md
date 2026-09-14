@@ -105,7 +105,7 @@ $ nix run .#demo
 >>> netbox.wait_for_unit("netbox-seed.service")
 ```
 
-NetBox is then at <http://localhost:8001> (admin / admin) and the served
+NetBox is then at <http://localhost:8011> (admin / admin) and the served
 flake at <http://localhost:8080/flake.tar.gz>, declaring the nixpkgs this
 repository pins as its input, so evaluating it fetches nothing:
 

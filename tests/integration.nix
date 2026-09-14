@@ -11,7 +11,7 @@ pkgs.testers.runNixOSTest {
         virtualisation.memorySize = 4096;
         services.netbox = {
           enable = true;
-          bind = "0.0.0.0:8001";
+          bind = "0.0.0.0:8011";
           settings.ALLOWED_HOSTS = [ "*" ];
         };
         # seeded on the vm, so the interactive demo needs no driver commands;
@@ -27,7 +27,7 @@ pkgs.testers.runNixOSTest {
           };
           script = "/run/current-system/sw/bin/netbox-manage shell < ${./seed.py} && touch /var/lib/netbox/.seeded";
         };
-        networking.firewall.allowedTCPPorts = [ 8001 ];
+        networking.firewall.allowedTCPPorts = [ 8011 ];
       };
 
     server =
@@ -36,7 +36,7 @@ pkgs.testers.runNixOSTest {
         imports = [ self.nixosModules.server ];
         services.netbox-nixos = {
           enable = true;
-          netboxUrl = "http://netbox:8001";
+          netboxUrl = "http://netbox:8011";
           # the token tests/seed.py creates
           tokenFile = toString (
             pkgs.writeText "token" "nbt_abcdefghijkl.0123456789abcdefghijklmnopqrstuvwxyz0123"
@@ -71,20 +71,20 @@ pkgs.testers.runNixOSTest {
       virtualisation.forwardPorts = [
         {
           from = "host";
-          host.port = 8001;
+          host.port = 8011;
           guest.port = 80;
         }
       ];
       # gunicorn serves no static files; the module collects them for a proxy.
       # the proxied host header has no port, so django must be told the origin
       # the browser uses
-      services.netbox.settings.CSRF_TRUSTED_ORIGINS = [ "http://localhost:8001" ];
+      services.netbox.settings.CSRF_TRUSTED_ORIGINS = [ "http://localhost:8011" ];
       services.nginx = {
         enable = true;
         recommendedProxySettings = true;
         virtualHosts.netbox = {
           default = true;
-          locations."/".proxyPass = "http://127.0.0.1:8001";
+          locations."/".proxyPass = "http://127.0.0.1:8011";
           locations."/static/".alias = "/var/lib/netbox/static/";
         };
       };
