@@ -50,9 +50,11 @@ in
           + lib.cli.toCommandLineShellGNU { } {
             netbox-url = cfg.netboxUrl;
             token-file = "%d/token";
-            listen = cfg.listen;
-            nixpkgs = cfg.nixpkgs;
-            platform = cfg.platform;
+            inherit (cfg)
+              listen
+              nixpkgs
+              platform
+              ;
           };
         LoadCredential = [ "token:${cfg.tokenFile}" ];
         DynamicUser = true;
