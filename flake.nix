@@ -55,32 +55,67 @@
             cd ${inputs.self}/packages/netbox-nixos
             export RUFF_CACHE_DIR=$TMPDIR/ruff MYPY_CACHE_DIR=$TMPDIR/mypy
             ruff check .
-            ruff format --check .
             mypy netbox_nixos.py tests/test_netbox_nixos.py
             touch $out
           '';
-      format = pkgs.runCommand "netbox-nixos-format" { nativeBuildInputs = [ pkgs.nixfmt ]; } ''
-        nixfmt --check \
-          ${inputs.self}/flake.nix \
-          ${inputs.self}/modules \
-          ${inputs.self}/tests \
-          ${inputs.self}/packages/netbox-nixos/package.nix
-        touch $out
-      '';
+      formatting = inputs.self.formatter.${system}.check inputs.self;
     }) inputs.nixpkgs.legacyPackages;
 
-    devShells = builtins.mapAttrs (_system: pkgs: {
+    devShells = builtins.mapAttrs (system: pkgs: {
       default = pkgs.mkShell {
         packages = with pkgs; [
           python3
           ruff
           mypy
-          nixfmt
           jq
+          inputs.self.formatter.${system}
         ];
       };
     }) inputs.nixpkgs.legacyPackages;
 
-    formatter = builtins.mapAttrs (_system: pkgs: pkgs.nixfmt-tree) inputs.nixpkgs.legacyPackages;
+    formatter = builtins.mapAttrs (
+      _system: pkgs:
+      pkgs.treefmt.withConfig {
+        settings = {
+          tree-root-file = "flake.nix";
+          on-unmatched = "info";
+          formatter = {
+            nixfmt = {
+              command = pkgs.lib.getExe pkgs.nixfmt;
+              includes = [ "*.nix" ];
+            };
+            statix = {
+              command = pkgs.lib.getExe pkgs.statix;
+              options = [ "fix" ];
+              no-positional-arg-support = true;
+              includes = [ "*.nix" ];
+            };
+            deadnix = {
+              command = pkgs.lib.getExe pkgs.deadnix;
+              options = [ "--edit" ];
+              includes = [ "*.nix" ];
+            };
+            ruff-format = {
+              command = pkgs.lib.getExe pkgs.ruff;
+              options = [ "format" ];
+              includes = [ "*.py" ];
+            };
+            ruff-check = {
+              command = pkgs.lib.getExe pkgs.ruff;
+              options = [
+                "check"
+                "--fix"
+              ];
+              includes = [ "*.py" ];
+            };
+            prettier = {
+              command = pkgs.lib.getExe pkgs.prettier;
+              options = [ "--write" ];
+              includes = [ "*.md" ];
+            };
+          };
+        };
+      }
+    ) inputs.nixpkgs.legacyPackages;
   };
 }

@@ -29,14 +29,14 @@ caches the URL for `tarball-ttl` (an hour); `nix flake update netbox
 
 Hosts are the devices and virtual machines with platform slug `nixos`.
 
-| NetBox | NixOS |
-| --- | --- |
-| name | `networking.hostName`, `networking.domain` if it is an fqdn |
-| primary IPs of all hosts, addresses with a DNS name | `networking.hosts` |
-| enabled physical interface | `systemd.network.networks."10-<name>"`: match by MAC (or name), MTU, addresses |
-| virtual interface with a parent and an untagged VLAN | `systemd.network.netdevs."10-<name>"` of kind `vlan` |
-| services | `networking.firewall.allowed{TCP,UDP}Ports` |
-| config context key `nixos` | merged into the configuration as is |
+| NetBox                                               | NixOS                                                                          |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------ |
+| name                                                 | `networking.hostName`, `networking.domain` if it is an fqdn                    |
+| primary IPs of all hosts, addresses with a DNS name  | `networking.hosts`                                                             |
+| enabled physical interface                           | `systemd.network.networks."10-<name>"`: match by MAC (or name), MTU, addresses |
+| virtual interface with a parent and an untagged VLAN | `systemd.network.netdevs."10-<name>"` of kind `vlan`                           |
+| services                                             | `networking.firewall.allowed{TCP,UDP}Ports`                                    |
+| config context key `nixos`                           | merged into the configuration as is                                            |
 
 The config context is the escape hatch: anything NetBox cannot model becomes
 a JSON object under `nixos`, weighted and scoped by NetBox's own rules. That
