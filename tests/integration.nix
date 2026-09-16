@@ -4,31 +4,29 @@ pkgs.testers.runNixOSTest {
   name = "netbox-nixos";
 
   nodes = {
-    netbox =
-      { pkgs, ... }:
-      {
-        # gunicorn workers plus the django shell that seeds the database
-        virtualisation.memorySize = 4096;
-        services.netbox = {
-          enable = true;
-          bind = "0.0.0.0:8011";
-          settings.ALLOWED_HOSTS = [ "*" ];
-        };
-        # seeded on the vm, so the interactive demo needs no driver commands;
-        # the marker survives --keep-vm-state
-        systemd.services.netbox-seed = {
-          wantedBy = [ "multi-user.target" ];
-          requires = [ "netbox.service" ];
-          after = [ "netbox.service" ];
-          unitConfig.ConditionPathExists = "!/var/lib/netbox/.seeded";
-          serviceConfig = {
-            Type = "oneshot";
-            RemainAfterExit = true;
-          };
-          script = "/run/current-system/sw/bin/netbox-manage shell < ${./seed.py} && touch /var/lib/netbox/.seeded";
-        };
-        networking.firewall.allowedTCPPorts = [ 8011 ];
+    netbox = {
+      # gunicorn workers plus the django shell that seeds the database
+      virtualisation.memorySize = 4096;
+      services.netbox = {
+        enable = true;
+        bind = "0.0.0.0:8011";
+        settings.ALLOWED_HOSTS = [ "*" ];
       };
+      # seeded on the vm, so the interactive demo needs no driver commands;
+      # the marker survives --keep-vm-state
+      systemd.services.netbox-seed = {
+        wantedBy = [ "multi-user.target" ];
+        requires = [ "netbox.service" ];
+        after = [ "netbox.service" ];
+        unitConfig.ConditionPathExists = "!/var/lib/netbox/.seeded";
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+        };
+        script = "/run/current-system/sw/bin/netbox-manage shell < ${./seed.py} && touch /var/lib/netbox/.seeded";
+      };
+      networking.firewall.allowedTCPPorts = [ 8011 ];
+    };
 
     server =
       { pkgs, ... }:

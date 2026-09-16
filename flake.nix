@@ -22,7 +22,7 @@
             inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.netbox-nixos;
       };
 
-    apps = builtins.mapAttrs (system: pkgs: {
+    apps = builtins.mapAttrs (_system: pkgs: {
       demo = {
         type = "app";
         program = "${
@@ -69,7 +69,7 @@
       '';
     }) inputs.nixpkgs.legacyPackages;
 
-    devShells = builtins.mapAttrs (system: pkgs: {
+    devShells = builtins.mapAttrs (_system: pkgs: {
       default = pkgs.mkShell {
         packages = with pkgs; [
           python3
@@ -81,6 +81,6 @@
       };
     }) inputs.nixpkgs.legacyPackages;
 
-    formatter = builtins.mapAttrs (system: pkgs: pkgs.nixfmt-tree) inputs.nixpkgs.legacyPackages;
+    formatter = builtins.mapAttrs (_system: pkgs: pkgs.nixfmt-tree) inputs.nixpkgs.legacyPackages;
   };
 }
