@@ -22,12 +22,10 @@
             inputs.self.packages.${pkgs.stdenv.hostPlatform.system}.netbox-nixos;
       };
 
-    apps = builtins.mapAttrs (_system: pkgs: {
+    apps = builtins.mapAttrs (system: _pkgs: {
       demo = {
         type = "app";
-        program = "${
-          inputs.self.checks.${system}.integration.driverInteractive
-        }/bin/nixos-test-driver";
+        program = "${inputs.self.checks.${system}.integration.driverInteractive}/bin/nixos-test-driver";
         meta.description = "the vm test's netbox and server, reachable from the host";
       };
     }) inputs.nixpkgs.legacyPackages;
