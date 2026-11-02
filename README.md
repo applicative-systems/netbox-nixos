@@ -1,7 +1,15 @@
 # netbox-nixos
 
-**This is a proof of concept. Do not use it in production.** It exists to
-show that the idea works; see the limitations at the end.
+> [!WARNING]
+> **This is a proof of concept. Do not use it in production.**
+>
+> A production-ready Rust implementation will replace this repository's
+> contents once client approval is granted. Stay tuned.
+
+> [!NOTE]
+> This is the companion repo to a talk given by [Jacek](https://github.com/tfc) and [Kierán](https://github.com/kmein) at NixCon 2026 in Kraków.
+> 
+> [Slides](./docs/netbox-nixos-krakow-nixcon.pdf) · [Video](https://www.youtube.com/watch?v=aiJUw-JQ2AA)
 
 Serve a NetBox instance as a Nix flake, so that NixOS hosts take their network
 configuration from the source of truth instead of repeating it.
